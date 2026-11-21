@@ -1,5 +1,5 @@
 [package]
-name = "XD01_FC-ESC_COMM"
+name = "xd01_fc-esc_comm"
 version = "0.1.0"
 edition = "2024"
 
