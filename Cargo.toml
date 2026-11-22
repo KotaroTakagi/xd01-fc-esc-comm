@@ -1,11 +1,12 @@
 [package]
-name = "XD01_FC-ESC_COMM"
+name = "xd01_fc-esc_comm"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 crc = "3.4.0"
 zerocopy = { version = "0.8", features = ["derive"] }
+num_enum = { version = "0.7", default-features = false }
 
 [lib]
 test = false

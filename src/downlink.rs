@@ -1,10 +1,11 @@
 use crate::common::Aligned16;
-
+pub mod info;
+pub use info::DownlinkInfo;
 use crc::{CRC_16_MODBUS, Crc};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub const DOWNLINK_SIZE: usize = 36; //指令値(4*4B)+流入速度(4*4B)+その他情報(2B)+CRC-16(2B)
-const PAYLOAD_SIZE: usize = 34;
+pub const PAYLOAD_SIZE: usize = 34;
 const _: () = assert!(PAYLOAD_SIZE + 2 == DOWNLINK_SIZE);
 
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
@@ -38,7 +39,7 @@ pub enum DownlinkPayload<'a> {
 pub struct DownlinkPayloadNormal<'a> {
     thrust_ref: &'a [f32; 4],
     inlet_velocity: &'a [f32; 4],
-    info: Option<[u8; 2]>,
+    info: Option<DownlinkInfo>,
 }
 
 impl<'a> DownlinkPayloadNormal<'a> {
@@ -48,13 +49,13 @@ impl<'a> DownlinkPayloadNormal<'a> {
     pub fn get_inlet_velocity(&self) -> &'a [f32; 4] {
         self.inlet_velocity
     }
-    pub fn get_info(&self) -> Option<[u8; 2]> {
+    pub fn get_info(&self) -> Option<DownlinkInfo> {
         self.info
     }
     pub fn pack(
         thrust_ref: &'a [f32; 4],
         inlet_velocity: &'a [f32; 4],
-        info: Option<[u8; 2]>,
+        info: Option<DownlinkInfo>,
     ) -> Self {
         Self {
             thrust_ref,
@@ -68,6 +69,11 @@ pub struct DownlinkPayloadCritical<'a> {
     critical_info: &'a [u8; PAYLOAD_SIZE],
 }
 
+pub enum DownlinkErr{
+    CRCErr,
+    InfoParseErr,
+}
+
 impl<'a> DownlinkPayloadCritical<'a> {
     pub fn pac(critical_info: &'a [u8; PAYLOAD_SIZE]) -> Self {
         Self { critical_info }
@@ -79,25 +85,28 @@ impl<'a> DownlinkPayloadCritical<'a> {
 }
 
 impl DownlinkBytes {
-    pub fn decode<'a>(&'a self) -> Option<DownlinkPayload<'a>> {
+    pub fn decode<'a>(&'a self) -> Result<DownlinkPayload<'a>,DownlinkErr> {
         let parsed_frame: &DownlinkFrame = zerocopy::transmute_ref!(self);
         let crc = u16::from_le_bytes(parsed_frame.trailer);
         if crc != CRC16.checksum(&self.0[..PAYLOAD_SIZE]) {
-            return None;
+            return Err(DownlinkErr::CRCErr);
         } else {
             if parsed_frame.info[0] & CRITICAL_BIT != 0 {
-                return Some(DownlinkPayload::Critical(DownlinkPayloadCritical {
+                return Ok(DownlinkPayload::Critical(DownlinkPayloadCritical {
                     critical_info: parsed_frame.as_bytes().first_chunk::<34>().unwrap(),
                 }));
             } else {
                 if parsed_frame.info[0] & INFO_BIT != 0 {
-                    Some(DownlinkPayload::Normal(DownlinkPayloadNormal {
+                    match DownlinkInfo::try_from(parsed_frame.info){
+                        Ok(info) => Ok(DownlinkPayload::Normal(DownlinkPayloadNormal {
                         thrust_ref: zerocopy::transmute_ref!(&parsed_frame.thrust_ref),
                         inlet_velocity: zerocopy::transmute_ref!(&parsed_frame.inlet_velocity),
-                        info: Some(parsed_frame.info),
-                    }))
+                        info: Some(info),
+                    })),
+                    Err(_) => Err(DownlinkErr::InfoParseErr)
+                    }
                 } else {
-                    Some(DownlinkPayload::Normal(DownlinkPayloadNormal {
+                    Ok(DownlinkPayload::Normal(DownlinkPayloadNormal {
                         thrust_ref: zerocopy::transmute_ref!(&parsed_frame.thrust_ref),
                         inlet_velocity: zerocopy::transmute_ref!(&parsed_frame.inlet_velocity),
                         info: None,
@@ -115,7 +124,8 @@ impl DownlinkBytes {
                 frame.thrust_ref = zerocopy::transmute!(*payload.thrust_ref);
                 frame.inlet_velocity = zerocopy::transmute!(*payload.inlet_velocity);
                 frame.info = match payload.info {
-                    Some(mut info) => {
+                    Some(info) => {
+                        let mut info:[u8;2] = info.into(); 
                         info[0] = (info[0] | INFO_BIT) & !CRITICAL_BIT;
                         info
                     }

@@ -2,8 +2,8 @@ use crate::common::Aligned16;
 use crc::{CRC_16_MODBUS, Crc};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-pub const UPLINK_SIZE: usize = 20; //回転数or推力(4*4B)+その他情報(2B)+CRC-16(2B)
-const PAYLOAD_SIZE: usize = 18;
+pub const UPLINK_SIZE: usize = 36; //回転数or推力(4*4B)+トルクor電流(4*4B)+その他情報(2B)+CRC-16(2B)
+pub const PAYLOAD_SIZE: usize = 34;
 const _: () = assert!(PAYLOAD_SIZE + 2 == UPLINK_SIZE);
 
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
@@ -24,6 +24,7 @@ const CRC16: Crc<u16> = Crc::<u16>::new(&CRC_16_MODBUS);
 #[repr(C, align(4))]
 pub struct UplinkFrame {
     thrust_estim: Aligned16,
+    torque_estim: Aligned16,
     info: [u8; 2],
     trailer: [u8; 2],
 }
@@ -35,6 +36,7 @@ pub enum UplinkPayload<'a> {
 
 pub struct UplinkPayloadNormal<'a> {
     thrust_estim: &'a [f32; 4],
+    torque_estim: &'a [f32;4],
     info: Option<[u8; 2]>,
 }
 
@@ -45,8 +47,11 @@ impl<'a> UplinkPayloadNormal<'a> {
     pub fn get_info(&self) -> Option<[u8; 2]> {
         self.info
     }
-    pub fn pack(thrust_estim: &'a [f32; 4], info: Option<[u8; 2]>) -> Self {
-        Self { thrust_estim, info }
+    pub fn get_torque(&self)-> &'a [f32;4]{
+        self.torque_estim
+    }
+    pub fn pack(thrust_estim: &'a [f32; 4],torque_estim: &'a [f32;4], info: Option<[u8; 2]>) -> Self {
+        Self { thrust_estim,torque_estim, info }
     }
 }
 
@@ -82,11 +87,13 @@ impl UplinkBytes {
                 if parsed_frame.info[0] & INFO_BIT != 0 {
                     Some(UplinkPayload::Normal(UplinkPayloadNormal {
                         thrust_estim: zerocopy::transmute_ref!(&parsed_frame.thrust_estim),
+                        torque_estim: zerocopy::transmute_ref!(&parsed_frame.torque_estim),
                         info: Some(parsed_frame.info),
                     }))
                 } else {
                     Some(UplinkPayload::Normal(UplinkPayloadNormal {
                         thrust_estim: zerocopy::transmute_ref!(&parsed_frame.thrust_estim),
+                        torque_estim: zerocopy::transmute_ref!(&parsed_frame.torque_estim),
                         info: None,
                     }))
                 }
@@ -99,6 +106,7 @@ impl UplinkBytes {
         match payload {
             UplinkPayload::Normal(payload) => {
                 frame.thrust_estim = zerocopy::transmute!(*payload.thrust_estim);
+                frame.torque_estim = zerocopy::transmute!(*payload.torque_estim);
                 frame.info = match payload.info {
                     Some(mut info) => {
                         info[0] = (info[0] | INFO_BIT) & !CRITICAL_BIT;
@@ -108,7 +116,6 @@ impl UplinkBytes {
                 };
             }
             UplinkPayload::Critical(message) => {
-                // 先頭18バイト(thrust_estim + info)に直接コピー
                 frame.as_mut_bytes()[..PAYLOAD_SIZE].copy_from_slice(message.critical_info);
                 frame.info[0] |= CRITICAL_BIT;
             }
