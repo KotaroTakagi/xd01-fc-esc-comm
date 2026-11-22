@@ -3,7 +3,7 @@ use crc::{CRC_16_MODBUS, Crc};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub const UPLINK_SIZE: usize = 20; //回転数or推力(4*4B)+その他情報(2B)+CRC-16(2B)
-const PAYLOAD_SIZE: usize = 18;
+pub const PAYLOAD_SIZE: usize = 18;
 const _: () = assert!(PAYLOAD_SIZE + 2 == UPLINK_SIZE);
 
 #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
